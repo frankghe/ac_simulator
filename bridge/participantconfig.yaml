@@ -1,0 +1,14 @@
+ParticipantName: CanSender
+RegistryUri: silkit://localhost:8500
+
+Middleware:
+  ConnectOnCreate: true
+
+Can:
+  - Name: CAN1
+    Network: CAN_Network
+
+Logging:
+  Sinks:
+    - Type: Stdout
+      Level: Trace

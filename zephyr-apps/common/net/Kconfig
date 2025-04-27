@@ -1,0 +1,71 @@
+# Network configuration options
+
+# Copyright (c) 2024
+# SPDX-License-Identifier: Apache-2.0
+
+config NET_APP_PORT
+    int "Port number for network application"
+    default 5000
+    help
+      Port number to use for the network application.
+
+config NET_APP_STACK_SIZE
+    int "Network thread stack size"
+    default 2048
+    help
+      Stack size for the network thread.
+
+config NET_APP_PRIORITY
+    int "Network thread priority"
+    default 8
+    help
+      Priority for the network thread.
+
+config NET_APP_RECV_BUFFER_SIZE
+    int "Network receive buffer size"
+    default 1280
+    help
+      Size of the receive buffer for network messages.
+
+# Network module configuration options
+
+menuconfig AC_NET
+    bool "AC Network Module"
+    default y
+    depends on NETWORKING
+    help
+      Enable AC Network Module
+
+if AC_NET
+
+config AC_NET_LOG_LEVEL
+    int "Log level for network module"
+    default 4
+    range 0 4
+    help
+      Sets log level for network module.
+      0: OFF
+      1: ERROR
+      2: WARNING
+      3: INFO
+      4: DEBUG
+
+config AC_NET_STACK_SIZE
+    int "Network thread stack size"
+    default 2048
+    help
+      Stack size for network thread.
+
+config AC_NET_PRIORITY
+    int "Network thread priority"
+    default 5
+    help
+      Priority for network thread.
+
+config AC_NET_RECV_BUFFER_SIZE
+    int "Network receive buffer size"
+    default 1280
+    help
+      Size of the receive buffer for network messages.
+
+endif # AC_NET 

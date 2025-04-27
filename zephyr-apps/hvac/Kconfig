@@ -1,0 +1,27 @@
+# Private config options for HVAC application
+
+# Copyright (c) 2024
+# SPDX-License-Identifier: Apache-2.0
+
+# Workaround: Define both CONFIG_THERMAL_PORT and CONFIG_HVAC_PORT
+# to ensure compatibility during the transition
+config THERMAL_PORT
+    int "Legacy thermal application port"
+    default 5000
+    help
+      This option is kept for compatibility with existing code.
+
+config HVAC_PORT
+    int "HVAC application port"
+    default 5000
+    help
+      This option specifies the UDP port to use for the HVAC application.
+
+# Network configuration
+config AC_NET_LOG_LEVEL
+    int "Log level for network module"
+    default 4
+    help
+      Log level for network module (0-4).
+
+source "Kconfig.zephyr" 

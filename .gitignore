@@ -1,0 +1,74 @@
+# Build directories
+build/
+zephyr-apps/*/build/
+**/Debug/
+**/Release/
+
+# Executables
+*.exe
+*.out
+*.elf
+can_test/can_send_test
+can_test/can_receive_test
+
+# Object files
+*.o
+*.ko
+*.obj
+*.pyc
+__pycache__/
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+*.so
+*.so.*
+*.dll
+*.dylib
+
+# Backup files
+*.bak
+*.old
+*~
+*.swp
+*.swo
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+
+# Environment and IDE files
+.env
+.venv
+venv/
+ENV/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.sublime-workspace
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Zephyr specific
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+outdir/
+zephyr-apps/*/zephyr/
+generated/ 

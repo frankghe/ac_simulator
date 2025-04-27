@@ -1,0 +1,4 @@
+Logging:
+  Sinks:
+    - Type: Stdout
+      Level: Trace
