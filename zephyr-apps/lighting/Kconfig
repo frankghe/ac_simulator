@@ -1,0 +1,32 @@
+# Private config options for Lighting application
+
+# Copyright (c) 2024
+# SPDX-License-Identifier: Apache-2.0
+
+# Workaround for board config issues
+config CONSOLE
+    bool "Console support"
+    default y
+    help
+      This option enables console support.
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+    int "Hardware cycles per second"
+    default 1000000
+    help
+      Hardware cycles per second.
+
+config LIGHTING_PORT
+    int "Lighting application port"
+    default 5001
+    help
+      This option specifies the UDP port to use for the lighting application.
+
+# Network configuration
+config AC_NET_LOG_LEVEL
+    int "Log level for network module"
+    default 4
+    help
+      Log level for network module (0-4).
+
+source "Kconfig.zephyr"

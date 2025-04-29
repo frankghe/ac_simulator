@@ -1,0 +1,8 @@
+/ {
+    my_can: can {
+        compatible = "zephyr,native-linux-can";
+        label = "my_can";
+        host-interface = "vcan0";
+        status = "okay";
+    };
+};

@@ -16,6 +16,21 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NET_TOOLS_DIR="$USER_HOME/projects/zephyr_project/tools/net-tools"
+
+# Check if net-tools directory exists
+if [ ! -d "$NET_TOOLS_DIR" ]; then
+    echo "Error: net-tools directory not found at $NET_TOOLS_DIR"
+    echo "Please make sure Zephyr project is installed and net-tools are available"
+    exit 1
+fi
+
+# Check if net-setup.sh exists
+if [ ! -f "$NET_TOOLS_DIR/net-setup.sh" ]; then
+    echo "Error: net-setup.sh not found in $NET_TOOLS_DIR"
+    echo "Please make sure Zephyr project is installed and net-tools are available"
+    exit 1
+fi
+
 # Define paths to individual conf files
 CONF_FILE_ZETH0="$SCRIPT_DIR/ac_control/zeth0.conf"
 CONF_FILE_ZETH1="$SCRIPT_DIR/hvac/zeth1.conf"
@@ -23,14 +38,8 @@ CONF_FILE_ZETH1="$SCRIPT_DIR/hvac/zeth1.conf"
 # Function to clean up interfaces on Ctrl+C
 cleanup() {
     echo "Cleaning up interfaces..."
-    # Stop interfaces individually
-    # ip link set zeth0 down 2>/dev/null # Comment out zeth0 cleanup
     ip link set zeth1 down 2>/dev/null
-    # ip tuntap del zeth0 mode tap 2>/dev/null # Comment out zeth0 cleanup
     ip tuntap del zeth1 mode tap 2>/dev/null
-    # Optional: Call net-setup stop if needed, but direct commands are simpler here
-    # $NET_TOOLS_DIR/net-setup.sh --config "$CONF_FILE_ZETH0" --iface zeth0 stop
-    # $NET_TOOLS_DIR/net-setup.sh --config "$CONF_FILE_ZETH1" --iface zeth1 stop
     exit
 }
 
@@ -39,16 +48,13 @@ trap cleanup INT TERM
 
 echo "Setting up AC simulator TAP interface (zeth1 only)..."
 
-# Comment out first interface creation
-# # Create first interface (zeth0)
-# $NET_TOOLS_DIR/net-setup.sh --config "$CONF_FILE_ZETH0" --iface zeth0 start
-
 # Create second interface (zeth1)
-$NET_TOOLS_DIR/net-setup.sh --config "$CONF_FILE_ZETH1" --iface zeth1 start
+if ! $NET_TOOLS_DIR/net-setup.sh --config "$CONF_FILE_ZETH1" --iface zeth1 start; then
+    echo "Error: Failed to create TAP interface zeth1"
+    exit 1
+fi
 
 echo "TAP interface zeth1 is ready:"
-# ip addr show zeth0 # Comment out zeth0 display
-# echo
 ip addr show zeth1
 
 echo
