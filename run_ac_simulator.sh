@@ -48,7 +48,7 @@ sleep 2
 
 # Fourth terminal: Run AC panel GUI
 echo "Opening terminal for AC Panel GUI..."
-$TERMINAL bash -c "cd $SCRIPT_DIR/gui && \
+$TERMINAL bash -c "cd $SCRIPT_DIR/hvac && \
     echo 'Starting AC Panel GUI...' && \
     python3 ac_panel.py; echo 'AC Panel GUI stopped. Press Enter to close this window.'; read" &
 

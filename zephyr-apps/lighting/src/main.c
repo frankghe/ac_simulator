@@ -17,8 +17,9 @@ LOG_MODULE_REGISTER(lighting_ecu, LOG_LEVEL_INF);
 
 struct lighting_data lighting_data;
 
-/* Work item for periodic blinker update */
+/* Work items for periodic updates */
 static struct k_work_delayable blinker_work;
+static struct k_work_delayable status_work;
 static const struct device *can_dev;
 
 /* Flag to indicate shutdown requested */
@@ -80,6 +81,15 @@ static void send_status_update(void)
             lighting_data.hazard_state);
 }
 
+static void status_update(struct k_work *work)
+{
+    /* Send status update */
+    send_status_update();
+
+    /* Schedule next update (2 second interval) */
+    k_work_schedule(&status_work, K_MSEC(2000));
+}
+
 static void blinker_update(struct k_work *work)
 {
     static uint8_t blink_state = 0;
@@ -104,8 +114,8 @@ static void blinker_update(struct k_work *work)
     /* Send status update */
     send_status_update();
 
-    /* Schedule next update (500ms blink rate) */
-    k_work_schedule(&blinker_work, K_MSEC(500));
+    /* Schedule next update (2 second interval) */
+    k_work_schedule(&blinker_work, K_MSEC(2000));
 }
 
 static void setup_can(void)
@@ -133,13 +143,16 @@ static void setup_can(void)
     struct can_filter filter = {
         .id = LIGHTING_CONTROL_ID,
         .mask = CAN_STD_ID_MASK,
-        .flags = CAN_FILTER_IDE
+        .flags = 0  /* Changed from CAN_FILTER_IDE to 0 for standard frames */
     };
 
+    LOG_INF("Adding CAN filter for ID 0x%x with mask 0x%x", filter.id, filter.mask);
     ret = can_add_rx_filter(can_dev, can_receiver_thread, NULL, &filter);
     if (ret < 0) {
         LOG_ERR("Failed to add CAN filter (err %d)", ret);
         /* Continue anyway, we'll receive all messages */
+    } else {
+        LOG_INF("CAN filter added successfully with ID %d", ret);
     }
     
     LOG_INF("CAN setup complete");
@@ -150,7 +163,12 @@ static void can_receiver_thread(const struct device *dev, struct can_frame *fram
     ARG_UNUSED(dev);
     ARG_UNUSED(user_data);
 
-    LOG_DBG("Received CAN frame: ID 0x%x, len %d", frame->id, frame->dlc);
+    /* Print detailed CAN frame information */
+    LOG_INF("Received CAN frame:");
+    LOG_INF("  ID: 0x%x", frame->id);
+    LOG_INF("  Flags: 0x%x", frame->flags);
+    LOG_INF("  DLC: %d", frame->dlc);
+    LOG_INF("  Data: [%d, %d, %d]", frame->data[0], frame->data[1], frame->data[2]);
 
     /* Process frame */
     if (frame->id == LIGHTING_CONTROL_ID) {
@@ -174,9 +192,13 @@ void start_lighting(void)
     /* Setup CAN */
     setup_can();
 
-    /* Initialize work queue for blinker update */
+    /* Initialize work queues */
     k_work_init_delayable(&blinker_work, blinker_update);
-    k_work_schedule(&blinker_work, K_MSEC(500));
+    k_work_init_delayable(&status_work, status_update);
+    
+    /* Start periodic updates */
+    k_work_schedule(&blinker_work, K_MSEC(500));  /* Blinker updates every 500ms */
+    k_work_schedule(&status_work, K_MSEC(2000));  /* Status updates every 2 seconds */
 
     /* Send initial status update */
     send_status_update();
@@ -186,6 +208,7 @@ void stop_lighting(void)
 {
     /* Clean up resources */
     k_work_cancel_delayable(&blinker_work);
+    k_work_cancel_delayable(&status_work);
     if (can_dev) {
         can_stop(can_dev);
     }

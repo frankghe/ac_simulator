@@ -2,3 +2,31 @@ Logging:
   Sinks:
     - Type: Stdout
       Level: Trace
+  Loggers:
+    - Name: SilKit
+      Level: Trace
+    - Name: SilKit::Services::Can
+      Level: Trace
+    - Name: SilKit::Services::Can::CanController
+      Level: Trace
+
+Networks:
+  can:
+    - name: CAN1
+      interface: vcan0
+      baudrate: 500000
+      mode: active
+
+Participants:
+  - name: Lighting_Panel
+    can:
+      - name: CAN1
+        interface: vcan0
+        baudrate: 500000
+        mode: active
+  - name: Lighting_ECU
+    can:
+      - name: CAN1
+        interface: vcan0
+        baudrate: 500000
+        mode: active
