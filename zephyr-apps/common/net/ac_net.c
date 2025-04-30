@@ -25,24 +25,33 @@ static void ac_net_thread(void *p1, void *p2, void *p3)
             k_msleep(1000);
             continue;
         }
-
         ret = recv(data->sock, data->recv_buffer, sizeof(data->recv_buffer) - 1, 0);
-        if (ret <= 0) {
-            if (ret < 0) {
-                LOG_ERR("recv error: %d (%s)", errno, strerror(errno));
-            } else {
-                LOG_INF("Connection closed by peer");
-            }
-            
-            if (data->sock >= 0) {
-                close(data->sock);
-                data->sock = -1;
-            }
+        if (ret == 0) {
+            LOG_WRN("Peer closed connection gracefully (recv=0)");
+            // Option 1: Close and clean up (current behavior)
+            // Option 2: Just mark disconnected, do not close
+            // Option 3: Wait for reconnect logic
+
+            close(data->sock);
+            data->sock = -1;
             data->connected = false;
-            k_msleep(1000);
             continue;
         }
 
+        if (ret < 0) {
+            LOG_ERR("recv error: %d (%s)", errno, strerror(errno));
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Non-blocking socket: no data available yet
+                continue;
+            }
+
+            // Other errors = real disconnect
+            close(data->sock);
+            data->sock = -1;
+            data->connected = false;
+            continue;
+        }
         data->recv_buffer[ret] = '\0';
         atomic_add(&data->bytes_received, ret);
         data->counter++;
@@ -175,27 +184,32 @@ int ac_net_start(struct ac_net_data *data, uint16_t port, const char *peer_addr)
         return -EINVAL;
     }
 
-    // Store connection info for use in event handler
     data->port = port;
     strncpy(data->peer_addr, peer_addr, sizeof(data->peer_addr) - 1);
     data->peer_addr[sizeof(data->peer_addr) - 1] = '\0';
 
-    /* Start network thread */
+    /* Start thread */
     k_thread_create(&data->thread, data->stack,
                    data->stack_size,
                    ac_net_thread, data, NULL, NULL,
                    5, 0, K_NO_WAIT);
+    k_thread_name_set(&data->thread, "ac_net_thread");
 
-    /* Wait for network to be ready */
-    if (IS_ENABLED(CONFIG_NET_CONNECTION_MANAGER)) {
-        LOG_INF("Waiting for network to be ready...");
-        conn_mgr_mon_resend_status();
-        k_sem_take(&data->run_sem, K_FOREVER);
-        return 0;
+    /* Wait for network interface to be up */
+    struct net_if *iface = net_if_get_default();
+    LOG_INF("Waiting for interface to be up...");
+    while (!net_if_is_up(iface)) {
+        k_sleep(K_MSEC(100));
     }
 
-    /* If no connection manager, set up socket directly */
-    return setup_socket(data, port, peer_addr);
+    LOG_INF("Interface is up, setting up socket...");
+    int ret = setup_socket(data, port, peer_addr);
+    if (ret < 0) {
+        return ret;
+    }
+
+    data->connected = true;
+    return 0;
 }
 
 void ac_net_stop(struct ac_net_data *data)

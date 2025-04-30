@@ -32,8 +32,7 @@ if [ ! -f "$NET_TOOLS_DIR/net-setup.sh" ]; then
 fi
 
 # Define paths to individual conf files
-CONF_FILE_ZETH0="$SCRIPT_DIR/ac_control/zeth0.conf"
-CONF_FILE_ZETH1="$SCRIPT_DIR/hvac/zeth1.conf"
+CONF_FILE_ZETH0="$SCRIPT_DIR/hvac/zeth0.conf"
 
 # Function to clean up interfaces on Ctrl+C
 cleanup() {
@@ -49,13 +48,13 @@ trap cleanup INT TERM
 echo "Setting up AC simulator TAP interface (zeth1 only)..."
 
 # Create second interface (zeth1)
-if ! $NET_TOOLS_DIR/net-setup.sh --config "$CONF_FILE_ZETH1" --iface zeth1 start; then
-    echo "Error: Failed to create TAP interface zeth1"
+if ! $NET_TOOLS_DIR/net-setup.sh --config "$CONF_FILE_ZETH0" --iface zeth0 start; then
+    echo "Error: Failed to create TAP interface zeth0"
     exit 1
 fi
 
-echo "TAP interface zeth1 is ready:"
-ip addr show zeth1
+echo "TAP interface zeth0 is ready:"
+ip addr show zeth0
 
 echo
 echo "Press Ctrl+C to cleanup and exit"
