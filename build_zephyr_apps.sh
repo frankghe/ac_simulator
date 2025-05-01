@@ -42,8 +42,13 @@ fi
 
 echo "Building all Zephyr applications for board: $BOARD"
 
-
-# Build Thermal Model application
-build_app "hvac" "$BOARD"
+# Find all directories in zephyr-apps that contain a CMakeLists.txt file
+for app_dir in zephyr-apps/*/; do
+    if [ -f "${app_dir}CMakeLists.txt" ]; then
+        app_name=$(basename "$app_dir")
+        echo "Found Zephyr application: $app_name"
+        build_app "$app_name" "$BOARD"
+    fi
+done
 
 echo "All applications built successfully!" 

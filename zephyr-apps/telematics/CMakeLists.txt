@@ -9,7 +9,7 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 # Include common module manually
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../common/net)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../common/net net_lib)
-project(hvac)
+project(telematics)
 
 # Add source files
 target_sources(app PRIVATE src/main.c)
