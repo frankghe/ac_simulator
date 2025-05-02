@@ -12,6 +12,7 @@
 #include <signal.h>
 
 #include "lighting.h"
+#include "can_ids.h"
 
 LOG_MODULE_REGISTER(lighting_ecu, LOG_LEVEL_INF);
 
@@ -31,10 +32,6 @@ static void signal_handler(int sig)
     LOG_INF("Signal %d received, shutting down...", sig);
     running = 0;
 }
-
-/* CAN message IDs for the lighting ECU */
-#define LIGHTING_CONTROL_ID 0x110 /* Control message for lighting */
-#define LIGHTING_STATUS_ID  0x111 /* Status message from lighting ECU */
 
 /* CAN standard ID mask if not defined */
 #ifndef CAN_STD_ID_MASK

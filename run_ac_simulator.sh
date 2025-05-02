@@ -32,6 +32,18 @@ pkill -f "gateway.py"
 pkill -f "ac-sim-tap.sh"
 sleep 2
 
+# Setup vcan0 interface if it doesn't exist
+echo "Checking vcan0 interface..."
+if ! ip link show vcan0 &> /dev/null; then
+    echo "Setting up vcan0 interface..."
+    sudo modprobe vcan
+    sudo ip link add dev vcan0 type vcan
+    sudo ip link set up vcan0
+    echo "vcan0 interface created and enabled"
+else
+    echo "vcan0 interface already exists"
+fi
+
 # Start SIL-Kit registry in its own terminal
 echo "Opening terminal for SIL-Kit registry..."
 $TERMINAL wsl bash -c "\

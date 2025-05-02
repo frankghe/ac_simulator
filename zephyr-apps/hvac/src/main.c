@@ -11,6 +11,7 @@
 #include <math.h>
 
 #include "hvac.h"
+#include "can_ids.h"
 
 LOG_MODULE_REGISTER(hvac_model, LOG_LEVEL_INF);
 
@@ -84,7 +85,7 @@ static void handle_network_message(const char *msg, size_t len)
     LOG_INF("Decoded CAN frame - ID: 0x%x, Length: %d", msg_id, data_len);
     
     // Handle messages from ac_panel (AC Control GUI)
-    if (msg_id == 0xAC1) {  // AC status ID
+    if (msg_id == HVAC_AC_STATUS_ID) {  // AC status ID
         hvac_data.ac_on = msg_data[0];
         hvac_data.fan_speed = msg_data[1];
         // mode is in msg_data[2] but not used by hvac model
@@ -93,13 +94,13 @@ static void handle_network_message(const char *msg, size_t len)
                 hvac_data.ac_on,
                 hvac_data.fan_speed);
     }
-    else if (msg_id == 0xAC2) {  // Power status ID
+    else if (msg_id == HVAC_POWER_STATUS_ID) {  // Power status ID
         hvac_data.ac_on = msg_data[0];
         
         LOG_INF("Received AC power - State: %d",
                 hvac_data.ac_on);
     }
-    else if (msg_id == 0x123) {  // Legacy AC control message
+    else if (msg_id == HVAC_CONTROL_ID) {  // Legacy AC control message
         hvac_data.ac_on = msg_data[0];
         hvac_data.target_temp = (float)msg_data[1] / 2.0f;
         hvac_data.fan_speed = msg_data[2];
@@ -158,7 +159,7 @@ static void calculate_temperature(struct k_work *work)
     };
     
     // Send legacy format for backward compatibility
-    send_can_message(0x125, data, sizeof(data));
+    send_can_message(HVAC_STATUS_ID, data, sizeof(data));
     
     // Log current state
     LOG_INF("Thermal - Cabin: %.1f°C, Target: %.1f°C, External: %.1f°C",
