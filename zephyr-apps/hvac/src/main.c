@@ -9,107 +9,165 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <zephyr/drivers/can.h>
+#include <signal.h>
 
 #include "hvac.h"
 #include "can_ids.h"
 
-LOG_MODULE_REGISTER(hvac_model, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(hvac_model, LOG_LEVEL_DBG);
 
 struct hvac_data hvac_data;
 
-/* Work item for periodic temperature calculation */
+/* Work items for periodic updates */
 static struct k_work_delayable temp_calc_work;
+static struct k_work_delayable status_work;
+static const struct device *can_dev;
+
+/* Flag to indicate shutdown requested */
+static volatile sig_atomic_t running = 1;
+
+/* Signal handler */
+static void signal_handler(int sig)
+{
+    LOG_INF("Signal %d received, shutting down...", sig);
+    running = 0;
+}
+
+/* CAN standard ID mask if not defined */
+#ifndef CAN_STD_ID_MASK
+#define CAN_STD_ID_MASK     0x7FF
+#endif
 
 static void send_can_message(uint32_t id, uint8_t *msg_data, size_t len)
 {
-    // Create raw frame in the format: [4 bytes ID][1 byte len][data bytes]
-    uint8_t raw_frame[13]; // Max 4+1+8 bytes
-    size_t data_len = len > 8 ? 8 : len; // Limit to 8 bytes max
-    
-    // Add CAN ID (4 bytes, network byte order)
-    raw_frame[0] = (id >> 24) & 0xFF;
-    raw_frame[1] = (id >> 16) & 0xFF;
-    raw_frame[2] = (id >> 8) & 0xFF;
-    raw_frame[3] = id & 0xFF;
-    
-    // Add data length (1 byte)
-    raw_frame[4] = data_len;
-    
-    // Add data
-    for (int i = 0; i < data_len; i++) {
-        raw_frame[i + 5] = msg_data[i];
+    struct can_frame frame;
+    int ret;
+
+    /* Prepare CAN frame */
+    frame.id = id & CAN_STD_ID_MASK;  /* Ensure ID is within standard CAN range */
+    frame.flags = 0;                   /* Standard CAN frame */
+    frame.dlc = len > CAN_MAX_DLC ? CAN_MAX_DLC : len;
+    memcpy(frame.data, msg_data, frame.dlc);
+
+    /* Send frame */
+    ret = can_send(can_dev, &frame, K_MSEC(100), NULL, NULL);
+    if (ret != 0) {
+        LOG_ERR("Failed to send CAN frame (err %d)", ret);
+    } else {
+        LOG_DBG("Sent CAN frame ID 0x%x, len %d", id, frame.dlc);
     }
-    
-    // Calculate total frame size
-    size_t frame_size = 5 + data_len;
-    
-    // Send the raw frame
-    ac_net_send(&hvac_data.net, raw_frame, frame_size);
-    
-    LOG_INF("Sent raw CAN frame: ID=0x%x, len=%d", id, data_len);
 }
 
-static void handle_network_message(const char *msg, size_t len)
+/* Send status update via CAN */
+static void send_status_update(void)
 {
-    // For raw frame handling, we need at least 5 bytes (4 for ID, 1 for length)
-    if (len < 5) {
-        LOG_ERR("Received message too short: %d bytes", len);
-        return;
-    }
+    uint8_t data[8] = {
+        (uint8_t)(hvac_data.cabin_temp * 2),    // Current temp * 2
+        (uint8_t)(hvac_data.external_temp * 2), // External temp * 2
+        hvac_data.ac_on,                        // AC power state
+        hvac_data.fan_speed,                    // Fan speed
+        0, 0, 0, 0                              // Reserved
+    };
     
-    // Print raw message bytes for debugging
-    LOG_INF("Received raw CAN frame: %d bytes", len);
+    send_can_message(HVAC_STATUS_ID, data, sizeof(data));
     
-    // Extract CAN ID (first 4 bytes)
-    uint32_t msg_id = 0;
-    msg_id = ((uint32_t)((uint8_t)msg[0]) << 24) | 
-             ((uint32_t)((uint8_t)msg[1]) << 16) | 
-             ((uint32_t)((uint8_t)msg[2]) << 8) | 
-             (uint32_t)((uint8_t)msg[3]);
-    
-    // Extract data length (next byte)
-    uint8_t data_len = (uint8_t)msg[4];
-    
-    // Verify we have enough data
-    if (len < 5 + data_len) {
-        LOG_ERR("Incomplete CAN frame: expected %d bytes, got %d", 5 + data_len, len);
-        return;
-    }
-    
-    // Extract data bytes
-    uint8_t msg_data[8] = {0};
-    for (int i = 0; i < data_len && i < 8; i++) {
-        msg_data[i] = (uint8_t)msg[5 + i];
-    }
-    
-    LOG_INF("Decoded CAN frame - ID: 0x%x, Length: %d", msg_id, data_len);
-    
-    // Handle messages from ac_panel (AC Control GUI)
-    if (msg_id == HVAC_AC_STATUS_ID) {  // AC status ID
-        hvac_data.ac_on = msg_data[0];
-        hvac_data.fan_speed = msg_data[1];
-        // mode is in msg_data[2] but not used by hvac model
+    LOG_INF("Status - Cabin: %.1f°C, External: %.1f°C, AC: %d, Fan: %d",
+            (double)hvac_data.cabin_temp,
+            (double)hvac_data.external_temp,
+            hvac_data.ac_on,
+            hvac_data.fan_speed);
+}
+
+/* CAN receiver callback */
+static void can_receiver_thread(const struct device *dev, struct can_frame *frame, void *user_data)
+{
+    ARG_UNUSED(dev);
+    ARG_UNUSED(user_data);
+
+    /* Print detailed CAN frame information */
+    LOG_DBG("Received CAN frame:");
+    LOG_DBG("  ID: 0x%x", frame->id);
+    LOG_DBG("  Flags: 0x%x", frame->flags);
+    LOG_DBG("  DLC: %d", frame->dlc);
+    LOG_DBG("  Data: [%d, %d, %d]", frame->data[0], frame->data[1], frame->data[2]);
+
+    /* Handle messages from ac_panel (AC Control GUI) */
+    if (frame->id == HVAC_AC_STATUS_ID) {  // AC status ID
+        hvac_data.ac_on = frame->data[0];
+        hvac_data.fan_speed = frame->data[1];
+        // mode is in frame->data[2] but not used by hvac model
         
         LOG_INF("Received AC status - Power: %d, Fan: %d",
                 hvac_data.ac_on,
                 hvac_data.fan_speed);
     }
-    else if (msg_id == HVAC_POWER_STATUS_ID) {  // Power status ID
-        hvac_data.ac_on = msg_data[0];
+    else if (frame->id == HVAC_POWER_STATUS_ID) {  // Power status ID
+        hvac_data.ac_on = frame->data[0];
         
         LOG_INF("Received AC power - State: %d",
                 hvac_data.ac_on);
     }
-    else if (msg_id == HVAC_CONTROL_ID) {  // Legacy AC control message
-        hvac_data.ac_on = msg_data[0];
-        hvac_data.target_temp = (float)msg_data[1] / 2.0f;
-        hvac_data.fan_speed = msg_data[2];
+    else if (frame->id == HVAC_CONTROL_ID) {  // Legacy AC control message
+        hvac_data.ac_on = frame->data[0];
+        hvac_data.target_temp = (float)frame->data[1] / 2.0f;
+        hvac_data.fan_speed = frame->data[2];
         
         LOG_INF("Received legacy AC control - Power: %d, Target: %.1f°C, Fan: %d",
                 hvac_data.ac_on,
                 (double)hvac_data.target_temp,
                 hvac_data.fan_speed);
     }
+}
+
+static void setup_can(void)
+{
+    /* Get CAN device */
+    can_dev = device_get_binding("my_can");
+    if (!can_dev) {
+        LOG_ERR("Failed to get CAN device binding");
+        return;
+    }
+    
+    if (!device_is_ready(can_dev)) {
+        LOG_ERR("CAN device is not ready");
+        return;
+    }
+
+    /* Start CAN device */
+    int ret = can_start(can_dev);
+    if (ret != 0) {
+        LOG_ERR("Failed to start CAN device (err %d)", ret);
+        return;
+    }
+
+    /* Set up filter for HVAC control messages */
+    struct can_filter filter = {
+        .id = HVAC_CONTROL_ID,
+        .mask = CAN_STD_ID_MASK,
+        .flags = 0  /* Standard frames */
+    };
+
+    LOG_INF("Adding CAN filter for ID 0x%x with mask 0x%x", filter.id, filter.mask);
+    ret = can_add_rx_filter(can_dev, can_receiver_thread, NULL, &filter);
+    if (ret < 0) {
+        LOG_ERR("Failed to add CAN filter (err %d)", ret);
+        /* Continue anyway, we'll receive all messages */
+    } else {
+        LOG_INF("CAN filter added successfully with ID %d", ret);
+    }
+    
+    LOG_INF("CAN setup complete");
+}
+
+/* Status update work handler */
+static void status_update(struct k_work *work)
+{
+    /* Send status update */
+    send_status_update();
+
+    /* Schedule next update (2 second interval) */
+    k_work_schedule(&status_work, K_MSEC(2000));
 }
 
 /* Temperature calculation work handler */
@@ -131,7 +189,7 @@ static void calculate_temperature(struct k_work *work)
         float heat_flow = cooling_power * temp_diff;
         float cabin_temp_change = heat_flow / HVAC_MASS;
         
-        LOG_INF("AC calculation: diff=%.2f, power=%.2f, flow=%.4f, change=%.4f°C",
+        LOG_DBG("AC calculation: diff=%.2f, power=%.2f, flow=%.4f, change=%.4f°C",
                 (double)temp_diff, (double)cooling_power, (double)heat_flow, (double)cabin_temp_change);
         
         hvac_data.cabin_temp += cabin_temp_change;
@@ -142,24 +200,14 @@ static void calculate_temperature(struct k_work *work)
         float external_influence = (hvac_data.external_temp - hvac_data.cabin_temp) * external_factor;
         hvac_data.cabin_temp += external_influence;
         
-        LOG_INF("External influence: %.4f°C", (double)external_influence);
+        LOG_DBG("External influence: %.4f°C", (double)external_influence);
     } else {
         // When AC is off, cabin temperature slowly approaches external temperature
         // Higher rate when AC is off (windows might be open, normal air exchange)
         float temp_change = (hvac_data.external_temp - hvac_data.cabin_temp) * 0.03f;
         hvac_data.cabin_temp += temp_change;
-        LOG_INF("AC off: cabin temp changing by %.4f°C toward external", (double)temp_change);
+        LOG_DBG("AC off: cabin temp changing by %.4f°C toward external", (double)temp_change);
     }
-    
-    // Send temperature update via TCP (legacy format)
-    uint8_t data[8] = {
-        (uint8_t)(hvac_data.cabin_temp * 2),    // Current temp * 2
-        (uint8_t)(hvac_data.external_temp * 2), // External temp * 2
-        0, 0, 0, 0, 0, 0  // Reserved
-    };
-    
-    // Send legacy format for backward compatibility
-    send_can_message(HVAC_STATUS_ID, data, sizeof(data));
     
     // Log current state
     LOG_INF("Thermal - Cabin: %.1f°C, Target: %.1f°C, External: %.1f°C",
@@ -173,8 +221,6 @@ static void calculate_temperature(struct k_work *work)
 
 void start_ac_ecu(void)
 {
-    int ret;
-
     // Initialize hvac data
     memset(&hvac_data, 0, sizeof(hvac_data));
     hvac_data.cabin_temp = AMBIENT_TEMP;
@@ -182,39 +228,52 @@ void start_ac_ecu(void)
     hvac_data.fan_speed = 1;
     hvac_data.ac_on = false;
     hvac_data.external_temp = AMBIENT_TEMP + 5.0f;  // Slightly warmer outside
+    hvac_data.initialized = true;
 
-    // Initialize network
-    ret = ac_net_init(&hvac_data.net, hvac_stack,
-                      K_THREAD_STACK_SIZEOF(hvac_stack),
-                      handle_network_message);
-    if (ret < 0) {
-        LOG_ERR("Failed to initialize network: %d", ret);
-        return;
-    }
+    // Setup CAN
+    setup_can();
 
-    // Start network
-    ret = ac_net_start(&hvac_data.net, CONFIG_HVAC_PORT, CONFIG_NET_CONFIG_PEER_IPV4_ADDR);
-    if (ret < 0) {
-        LOG_ERR("Failed to start network: %d", ret);
-        return;
-    }
-
-    // Initialize work queue for temperature calculation
+    // Initialize work queues
     k_work_init_delayable(&temp_calc_work, calculate_temperature);
-    k_work_schedule(&temp_calc_work, K_MSEC(1000));
+    k_work_init_delayable(&status_work, status_update);
+    
+    // Start periodic updates
+    k_work_schedule(&temp_calc_work, K_MSEC(1000));  // Temperature updates every 1 second
+    k_work_schedule(&status_work, K_MSEC(2000));     // Status updates every 2 seconds
+
+    // Send initial status update
+    send_status_update();
 }
 
 void stop_hvac(void)
 {
-    ac_net_stop(&hvac_data.net);
+    // Clean up resources
     k_work_cancel_delayable(&temp_calc_work);
+    k_work_cancel_delayable(&status_work);
+    if (can_dev) {
+        can_stop(can_dev);
+    }
+    LOG_INF("HVAC ECU Application stopped successfully");
 }
 
 int main(void)
 {
-    LOG_INF("AC ECU Application");
+    LOG_INF("HVAC ECU Application");
+
+    /* Set up signal handling */
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
 
     start_ac_ecu();
-
+    
+    /* Main loop - wait for signal to exit */
+    while (running) {
+        k_sleep(K_MSEC(100));
+    }
+    
+    /* Clean shutdown */
+    LOG_INF("HVAC ECU Application preparing to shutdown...");
+    stop_hvac();
+    
     return 0;
 } 

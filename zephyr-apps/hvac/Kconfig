@@ -3,17 +3,22 @@
 # Copyright (c) 2024
 # SPDX-License-Identifier: Apache-2.0
 
-# Workaround: Define both CONFIG_THERMAL_PORT and CONFIG_HVAC_PORT
-# to ensure compatibility during the transition
-config THERMAL_PORT
-    int "Legacy thermal application port"
-    default 5000
+# Workaround for board config issues
+config CONSOLE
+    bool "Console support"
+    default y
     help
-      This option is kept for compatibility with existing code.
+      This option enables console support.
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+    int "Hardware cycles per second"
+    default 1000000
+    help
+      Hardware cycles per second.
 
 config HVAC_PORT
     int "HVAC application port"
-    default 5000
+    default 5002
     help
       This option specifies the UDP port to use for the HVAC application.
 

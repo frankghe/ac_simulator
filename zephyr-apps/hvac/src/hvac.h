@@ -1,7 +1,9 @@
 #ifndef HVAC_H_
 #define HVAC_H_
 
-#include "ac_net.h"
+#include <zephyr/kernel.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 /* Thermal model parameters */
 #define AMBIENT_TEMP_MIN -20
@@ -15,7 +17,6 @@
 #define HEAT_TRANSFER_COEFF 0.1f
 
 struct hvac_data {
-    struct ac_net_data net;
     /* Thermal model parameters */
     float cabin_temp;
     float target_temp;
@@ -30,7 +31,7 @@ extern struct hvac_data hvac_data;
 /* Thread stack */
 K_THREAD_STACK_DEFINE(hvac_stack, CONFIG_MAIN_STACK_SIZE);
 
-void start_hvac(void);
+void start_ac_ecu(void);
 void stop_hvac(void);
 
 #endif /* HVAC_H_ */ 
