@@ -141,23 +141,35 @@ static void setup_can(void)
         return;
     }
 
-    /* Set up filter for HVAC control messages */
-    struct can_filter filter = {
-        .id = HVAC_CONTROL_ID,
-        .mask = CAN_STD_ID_MASK,
-        .flags = 0  /* Standard frames */
+    // Add a filter for standard CAN IDs
+    struct can_filter std_filter = {
+        .id = 0,    // Match any standard ID
+        .mask = 0,  // Don't care about any bits
+        .flags = 0  // This is a filter for standard IDs
     };
 
-    LOG_INF("Adding CAN filter for ID 0x%x with mask 0x%x", filter.id, filter.mask);
-    ret = can_add_rx_filter(can_dev, can_receiver_thread, NULL, &filter);
+    LOG_INF("Attaching CAN RX filter for all standard messages.");
+    ret = can_add_rx_filter(can_dev, can_receiver_thread, NULL, &std_filter);
     if (ret < 0) {
-        LOG_ERR("Failed to add CAN filter (err %d)", ret);
-        /* Continue anyway, we'll receive all messages */
-    } else {
-        LOG_INF("CAN filter added successfully with ID %d", ret);
+        LOG_ERR("Failed to add standard CAN RX filter (err %d). May not receive standard CAN messages.", ret);
+        // Optionally return here if this is critical
+    }
+
+    // Add a filter for extended CAN IDs
+    struct can_filter ext_filter = {
+        .id = 0,    // Match any extended ID
+        .mask = 0,  // Don't care about any bits
+        .flags = CAN_FILTER_IDE // This is a filter for extended IDs
+    };
+
+    LOG_INF("Attaching CAN RX filter for all extended messages.");
+    ret = can_add_rx_filter(can_dev, can_receiver_thread, NULL, &ext_filter);
+    if (ret < 0) {
+        LOG_ERR("Failed to add extended CAN RX filter (err %d). May not receive extended CAN messages.", ret);
+        // Optionally return here if this is critical
     }
     
-    LOG_INF("CAN setup complete");
+    LOG_INF("CAN setup complete, listening for all messages via two filters.");
 }
 
 /* Status update work handler */

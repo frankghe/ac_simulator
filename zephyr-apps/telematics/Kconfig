@@ -1,20 +1,12 @@
-# Private config options for HVAC application
+# Private config options for TELEMATICS application
 
 # Copyright (c) 2024
 # SPDX-License-Identifier: Apache-2.0
 
 config TELEMATICS_PORT
-    int "Telematics application port"
-    default 5000
+    int "Telematics Gateway TCP Port"
+    default 8080
     help
-      This option specifies the UDP port to use for the HVAC application.
-
-# Network configuration
-config AC_NET_LOG_LEVEL
-    int "Log level for network module"
-    default 4
-    help
-      Log level for network module (0-4).
-
+      TCP port number for the telematics gateway server.
 
 source "Kconfig.zephyr" 

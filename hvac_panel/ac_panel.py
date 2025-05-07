@@ -135,22 +135,29 @@ class ACPanel(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Vehicle AC Control Panel")
-        self.setFixedSize(400, 300)
+        self.setFixedSize(400, 400) # Increased height for new label + external temp
 
         # SIL-Kit setup variables
         self.registry_uri = b"silkit://localhost:8500"
         self.participant_name = f"AC_Panel_{int(time.time())}".encode('utf-8')
         self.can_network_name = b"CAN1"
         
+        # CAN IDs (should match can_ids.h and hvac app)
+        self.HVAC_POWER_CMD_ID = 0xAC2  # ID to send AC ON/OFF command
+        self.HVAC_STATUS_ID_FROM_ECU = 0x125 # ID from HVAC with actual status
+        self.AC_STATE_BYTE_IDX_IN_STATUS = 2 # Index of AC state in 0x125
+
         print(f"AC Panel initializing with name {self.participant_name.decode()}")
         
         # Initialize state
-        self.cabin_temp = 22.0  # Actual cabin temperature from HVAC model
-        self.requested_temp = 19.0  # Cooler default requested temperature to ensure cooling when AC is on
-        self.external_temp = 27.0
+        self.cabin_temp = 22.0
+        self.requested_temp = 19.0
+        self.external_temp = 27.0 # Ensure this is initialized
         self.fan_speed = 1
-        self.power = False
-        self.mode = 'auto'  # Default mode
+        # self.power = False # This will now be self.actual_ac_power_state
+        self.actual_ac_power_state = False # Stores the true state from HVAC
+        self.last_requested_power_state = False # To toggle ON/OFF requests
+        self.mode = 'auto'
         
         # Initialize SIL-Kit
         self.initialize_silkit()
@@ -187,7 +194,7 @@ class ACPanel(QMainWindow):
         print("Creating lifecycle configuration...")
         lifecycle_config = SilKit_LifecycleConfiguration()
         SilKit_Struct_Init(SilKit_LifecycleConfiguration, lifecycle_config)
-        lifecycle_config.operationMode = SILKIT_OPERATIONMODE_AUTONOMOUS  # Using autonomous mode just like the C example
+        lifecycle_config.operationMode = SILKIT_OPERATIONMODE_AUTONOMOUS
 
         # Create lifecycle service
         print("Creating lifecycle service...")
@@ -227,7 +234,7 @@ class ACPanel(QMainWindow):
             raise RuntimeError(f"Failed to set CAN baud rate: {result}")
         print("CAN baud rate set.")
 
-        # Add CAN frame handler - using the class method directly
+        # Add CAN frame handler
         print("Adding CAN frame handler...")
         self.handler_id = c_uint32()
         global _global_frame_handler_ptr
@@ -256,324 +263,271 @@ class ACPanel(QMainWindow):
             raise RuntimeError(f"Failed to start CAN controller: {result}")
         print("CAN controller started.")
         
-        # Start the lifecycle - after starting the controller like in the C example
+        # Start lifecycle
         print("Starting lifecycle...")
         result = silkit.SilKit_LifecycleService_StartLifecycle(self.lifecycle_service)
         if result != 0:
-            print(f"Warning: Failed to start lifecycle service: {result}")
-        else:
-            print("Lifecycle started successfully.")
-        
-        print("SIL-Kit initialization complete.")
+            silkit.SilKit_Participant_Destroy(self.participant)
+            silkit.SilKit_ParticipantConfiguration_Destroy(self.participant_config)
+            raise RuntimeError(f"Failed to start lifecycle: {result}")
+        print("Lifecycle started.")
 
     def initialize_ui(self):
         # Create main widget and layout
-        main_widget = QWidget()
+        main_widget = QWidget(self)
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
-        
-        # Actual Cabin Temperature displays
-        temp_layout = QHBoxLayout()
-        temp_label = QLabel("Cabin Temperature:")
-        self.temp_display = QLCDNumber()
-        self.temp_display.setSegmentStyle(QLCDNumber.SegmentStyle.Filled)
-        self.temp_display.display(22.0)  # Default temperature
-        temp_layout.addWidget(temp_label)
-        temp_layout.addWidget(self.temp_display)
-        layout.addLayout(temp_layout)
-        
-        # Requested Temperature display
-        req_temp_layout = QHBoxLayout()
-        req_temp_label = QLabel("Requested Temperature:")
-        self.req_temp_display = QLCDNumber()
-        self.req_temp_display.setSegmentStyle(QLCDNumber.SegmentStyle.Filled)
-        self.req_temp_display.display(self.requested_temp)  # Use the instance variable
-        req_temp_layout.addWidget(req_temp_label)
-        req_temp_layout.addWidget(self.req_temp_display)
-        layout.addLayout(req_temp_layout)
-        
-        # External temperature display
-        ext_temp_layout = QHBoxLayout()
-        ext_temp_label = QLabel("External Temperature:")
-        self.ext_temp_display = QLCDNumber()
-        self.ext_temp_display.setSegmentStyle(QLCDNumber.SegmentStyle.Filled)
-        self.ext_temp_display.display(27.0)  # Default external temperature
-        ext_temp_layout.addWidget(ext_temp_label)
-        ext_temp_layout.addWidget(self.ext_temp_display)
-        layout.addLayout(ext_temp_layout)
-        
-        # Status indicator for temperature source
-        self.temp_source_label = QLabel("Temperature: Manual Control")
-        layout.addWidget(self.temp_source_label)
-        
-        # Temperature controls
-        temp_control = QHBoxLayout()
-        self.temp_up = QPushButton("▲")
-        self.temp_down = QPushButton("▼")
-        temp_control.addWidget(self.temp_down)
-        temp_control.addWidget(self.temp_up)
-        layout.addLayout(temp_control)
-        
-        # Fan speed control
-        fan_layout = QHBoxLayout()
-        fan_label = QLabel("Fan Speed:")
-        self.fan_display = QLCDNumber()
-        self.fan_display.setSegmentStyle(QLCDNumber.SegmentStyle.Filled)
-        self.fan_display.display(1)
-        fan_layout.addWidget(fan_label)
-        fan_layout.addWidget(self.fan_display)
-        layout.addLayout(fan_layout)
-        
-        # Fan controls
-        fan_control = QHBoxLayout()
-        self.fan_up = QPushButton("+")
-        self.fan_down = QPushButton("-")
-        fan_control.addWidget(self.fan_down)
-        fan_control.addWidget(self.fan_up)
-        layout.addLayout(fan_control)
-        
-        # AC power button
-        self.power_button = QPushButton("Power")
-        self.power_button.setCheckable(True)
+
+        # Power Button
+        self.power_button = QPushButton("Toggle AC Power")
+        # self.power_button.setCheckable(True) # No longer checkable
+        # self.power_button.toggled.connect(self.toggle_power) # Connect to a new simplified method
+        self.power_button.clicked.connect(self.request_ac_power_toggle) # New method
         layout.addWidget(self.power_button)
-        
-        # Connect signals
-        self.temp_up.clicked.connect(self.increase_temp)
-        self.temp_down.clicked.connect(self.decrease_temp)
-        self.fan_up.clicked.connect(self.increase_fan)
-        self.fan_down.clicked.connect(self.decrease_fan)
-        self.power_button.toggled.connect(self.toggle_power)
-        
-        # Setup periodic CAN message timer
-        self.can_timer = QTimer()
-        self.can_timer.timeout.connect(self.send_can_message)
-        self.can_timer.start(5000)  # Send messages every 5000ms
-        
-        # Send initial message to update the HVAC model with starting values
-        self.send_can_message()
-        self.send_temperature_message()
-        
-        # Setup timer for SilKit event processing
-        self.event_timer = QTimer()
-        self.event_timer.timeout.connect(self.process_silkit_events)
-        self.event_timer.start(100)  # Process events every 10ms
-            
-    def handle_can_frame(self, context, controller, frame_event):
-        print("CAN frame handler called!")
-        if not frame_event:
-            print("Error: Received null frame_event pointer")
-            return
-        if not frame_event.contents.frame:
-            print("Error: Received null frame pointer within frame_event")
-            return
-        
-        # Print the frame details for debugging
-        print("Received CAN frame:")
-        print_can_frame(frame_event.contents.frame.contents)
-        
-        frame = frame_event.contents.frame.contents
-        data_size = frame.data.size
-        
-        if frame.data.data and data_size > 0:
-            received_data = [frame.data.data[i] for i in range(data_size)]
-            
-            # Handle Temperature Update Message (ID 0x125)
-            if frame.id == 0x125 and data_size >= 2:
-                # Cabin temperature is in the first byte, divided by 2 to get actual value
-                cabin_temp = received_data[0] / 2.0
-                # External temperature is in the second byte, divided by 2
-                external_temp = received_data[1] / 2.0
-                
-                print(f"Updating temperatures: Cabin={cabin_temp:.1f}°C, External={external_temp:.1f}°C")
-                
-                # Update temperature displays
-                self.cabin_temp = cabin_temp
-                self.temp_display.display(cabin_temp)
-                self.ext_temp_display.display(external_temp)
-                
-                # Update temperature source label
-                self.temp_source_label.setText(f"Temperature: HVAC Model (Cabin: {cabin_temp:.1f}°C, Ext: {external_temp:.1f}°C)")
-            
-            # Also check for HVAC application's messages with ID 0x123
-            elif frame.id == 0x123 and data_size >= 2:
-                cabin_temp = received_data[0] / 2.0 if data_size > 0 else 0
-                external_temp = received_data[1] / 2.0 if data_size > 1 else 0
-                
-                print(f"Updating temperatures from ID 0x123: Cabin={cabin_temp:.1f}°C, External={external_temp:.1f}°C")
-                
-                # Update temperature displays
-                self.cabin_temp = cabin_temp
-                self.temp_display.display(cabin_temp)
-                self.ext_temp_display.display(external_temp)
-                
-                # Update temperature source label
-                self.temp_source_label.setText(f"Temperature: HVAC Model (ID 0x123) (Cabin: {cabin_temp:.1f}°C, Ext: {external_temp:.1f}°C)")
 
-    def send_can_message(self):
-        # Create and initialize CAN frame
-        frame = CanFrame()
-        SilKit_Struct_Init(CanFrame, frame)
+        # AC Status Label (New)
+        self.ac_status_label = QLabel("AC Status: Unknown")
+        self.ac_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        font = self.ac_status_label.font()
+        font.setPointSize(14)
+        self.ac_status_label.setFont(font)
+        layout.addWidget(self.ac_status_label)
+        self.update_ac_status_display() # Initialize display
 
-        # Set CAN frame fields
-        frame.id = 0xAC1  # AC status ID
-        frame.flags = 0
-        frame.dlc = 3
+        # Cabin Temperature Display
+        self.cabin_temp_display = QLCDNumber(self)
+        self.cabin_temp_display.setSegmentStyle(QLCDNumber.SegmentStyle.Flat)
+        self.cabin_temp_display.setDigitCount(4)
+        self.cabin_temp_display.display(f"{self.cabin_temp:.1f}")
+        layout.addWidget(QLabel("Cabin Temperature (°C):"))
+        layout.addWidget(self.cabin_temp_display)
 
-        # Prepare data
-        power_byte = 1 if self.power else 0
-        fan_byte = self.fan_speed & 0xFF
-        mode_byte = 0  # default 'auto'
-        if self.mode == 'cool':
-            mode_byte = 1
-        elif self.mode == 'heat':
-            mode_byte = 2
+        # External Temperature Display (New)
+        self.external_temp_display = QLCDNumber(self)
+        self.external_temp_display.setSegmentStyle(QLCDNumber.SegmentStyle.Flat)
+        self.external_temp_display.setDigitCount(4)
+        self.external_temp_display.display(f"{self.external_temp:.1f}") # Initialize with default
+        layout.addWidget(QLabel("External Temperature (°C):"))
+        layout.addWidget(self.external_temp_display)
 
-        data = bytearray([power_byte, fan_byte, mode_byte])
-        data_len = len(data)
-        frame.dlc = data_len
+        # Requested Temperature Controls
+        temp_control_layout = QHBoxLayout()
+        self.decrease_temp_button = QPushButton("-")
+        self.decrease_temp_button.clicked.connect(self.decrease_temp)
+        self.requested_temp_display = QLCDNumber(self)
+        self.requested_temp_display.setSegmentStyle(QLCDNumber.SegmentStyle.Flat)
+        self.requested_temp_display.setDigitCount(4)
+        self.requested_temp_display.display(f"{self.requested_temp:.1f}")
+        self.increase_temp_button = QPushButton("+")
+        self.increase_temp_button.clicked.connect(self.increase_temp)
+        temp_control_layout.addWidget(self.decrease_temp_button)
+        temp_control_layout.addWidget(self.requested_temp_display)
+        temp_control_layout.addWidget(self.increase_temp_button)
+        layout.addWidget(QLabel("Requested Temperature (°C):"))
+        layout.addLayout(temp_control_layout)
 
-        # Assign data using cast and SilKit_ByteVector structure
-        data_buffer = (c_uint8 * data_len)(*data)
-        frame.data.data = cast(data_buffer, POINTER(c_uint8))
-        frame.data.size = data_len
+        # Fan Speed Controls
+        fan_control_layout = QHBoxLayout()
+        self.decrease_fan_button = QPushButton("-")
+        self.decrease_fan_button.clicked.connect(self.decrease_fan)
+        self.fan_speed_display = QLabel(f"Fan: {self.fan_speed}")
+        self.fan_speed_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.increase_fan_button = QPushButton("+")
+        self.increase_fan_button.clicked.connect(self.increase_fan)
+        fan_control_layout.addWidget(self.decrease_fan_button)
+        fan_control_layout.addWidget(self.fan_speed_display)
+        fan_control_layout.addWidget(self.increase_fan_button)
+        layout.addWidget(QLabel("Fan Speed:"))
+        layout.addLayout(fan_control_layout)
 
-        # Send frame
-        result = silkit.SilKit_CanController_SendFrame(self.can_controller, byref(frame), None)
-        if result != 0:
-            print(f"Warning: Failed to send CAN frame: {result}")
-            
-        # Send temperature setting message (ID 0x123)
-        self.send_temperature_message()
-            
-    def send_temperature_message(self):
-        # Create and initialize CAN frame for temperature setting
-        frame = CanFrame()
-        SilKit_Struct_Init(CanFrame, frame)
-        
-        # Set CAN frame fields
-        frame.id = 0x123  # Temperature control ID
-        frame.flags = 0
-        frame.dlc = 3
-        
-        # Prepare data
-        power_byte = 1 if self.power else 0
-        # Convert temperature to 0.5°C resolution byte (multiply by 2)
-        temp_byte = int(self.requested_temp * 2) & 0xFF
-        fan_byte = self.fan_speed & 0xFF
-        
-        data = bytearray([power_byte, temp_byte, fan_byte])
-        data_len = len(data)
-        frame.dlc = data_len
-        
-        # Assign data using cast and SilKit_ByteVector structure
-        data_buffer = (c_uint8 * data_len)(*data)
-        frame.data.data = cast(data_buffer, POINTER(c_uint8))
-        frame.data.size = data_len
-        
-        # Send frame
-        result = silkit.SilKit_CanController_SendFrame(self.can_controller, byref(frame), None)
-        if result != 0:
-            print(f"Warning: Failed to send temperature CAN frame: {result}")
+        # Update display for fan speed
+        self.update_fan_display()
+
+    def update_ac_status_display(self):
+        status_text = "AC Status: ON" if self.actual_ac_power_state else "AC Status: OFF"
+        self.ac_status_label.setText(status_text)
+        # Optionally change color too
+        if self.actual_ac_power_state:
+            self.ac_status_label.setStyleSheet("QLabel { color : green; }")
         else:
-            print(f"Temperature CAN frame sent: Power={power_byte}, Temp={self.requested_temp}°C, Fan={fan_byte}")
+            self.ac_status_label.setStyleSheet("QLabel { color : red; }")
+
+    def update_cabin_temp_display(self):
+        self.cabin_temp_display.display(f"{self.cabin_temp:.1f}")
+
+    def update_external_temp_display(self): # New method
+        self.external_temp_display.display(f"{self.external_temp:.1f}")
+
+    def update_requested_temp_display(self):
+        self.requested_temp_display.display(f"{self.requested_temp:.1f}")
+
+    def update_fan_display(self):
+        self.fan_speed_display.setText(f"Fan: {self.fan_speed}")
+
+    def request_ac_power_toggle(self):
+        # Determine the new state to request (opposite of actual) and update last_requested_power_state.
+        self.last_requested_power_state = not self.actual_ac_power_state
+        requested_state_byte = int(self.last_requested_power_state) # True -> 1, False -> 0
+
+        print(f"Power button clicked. Requesting AC to be {'ON' if self.last_requested_power_state else 'OFF'} (Actual was: {self.actual_ac_power_state})")
+        
+        # Prepare CAN frame data for HVAC_POWER_CMD_ID (0xAC2)
+        # Assuming data format is [state_byte]
+        can_data_payload = bytes([requested_state_byte])
+        
+        frame = CanFrame()
+        SilKit_Struct_Init(CanFrame, frame)
+        frame.id = self.HVAC_POWER_CMD_ID 
+        frame.flags = 0 # Standard ID, Data frame
+        frame.dlc = len(can_data_payload)
+        
+        # Create a temporary ctypes buffer for the data payload
+        # and assign it to the SilKit_ByteVector
+        temp_data_buffer = (c_uint8 * len(can_data_payload))(*can_data_payload)
+        frame.data.data = cast(temp_data_buffer, POINTER(c_uint8))
+        frame.data.size = len(can_data_payload)
+
+        print(f"Sending CAN Command - ID: 0x{frame.id:X}, DLC: {frame.dlc}, Data: {list(can_data_payload)}")
+        # print_can_frame(frame) # For more detailed debug if needed
+
+        result = silkit.SilKit_CanController_SendFrame(self.can_controller, byref(frame), None)
+        if result != 0:
+            print(f"Error sending AC Power command: {result}")
+        else:
+            print("AC Power command sent successfully.")
+
+    def handle_can_frame(self, context, controller, frame_event):
+        # This function is called from a SIL-Kit internal thread.
+        # Be careful with GUI updates from here; consider using Qt signals if issues arise.
+        if not frame_event or not frame_event.contents.frame:
+            print("Received NULL frame_event or frame in handle_can_frame")
+            return
+
+        received_frame = frame_event.contents.frame.contents
+        can_id = received_frame.id
+        dlc = received_frame.dlc
+        
+        # Ensure data is accessible
+        if received_frame.data.data and dlc > 0 and dlc <= 8:
+            data_bytes = bytes(received_frame.data.data[0:dlc])
+        else:
+            data_bytes = b''
+
+        # print(f"Panel RX - ID: 0x{can_id:X}, DLC: {dlc}, Data: {list(data_bytes)}") # Debug all received frames
+
+        if can_id == self.HVAC_STATUS_ID_FROM_ECU: # 0x125
+            if dlc > self.AC_STATE_BYTE_IDX_IN_STATUS: # data[2] for 0x125 (and implies data[0], data[1] exist)
+                new_ac_state_byte = data_bytes[self.AC_STATE_BYTE_IDX_IN_STATUS]
+                self.actual_ac_power_state = (new_ac_state_byte == 1)
+                
+                # Update cabin temperature from data[0]
+                if dlc > 0: # Should always be true if dlc > AC_STATE_BYTE_IDX_IN_STATUS (2)
+                    self.cabin_temp = float(data_bytes[0]) / 2.0
+                
+                # Update external temperature from data[1]
+                if dlc > 1: # Check if data[1] is available
+                    self.external_temp = float(data_bytes[1]) / 2.0
+
+                # Update fan speed from data[3]
+                if dlc > 3:
+                     self.fan_speed = data_bytes[3]
+
+                print(f"Received HVAC Status (0x{can_id:X}): Actual AC Power={self.actual_ac_power_state}, CabinTemp={self.cabin_temp:.1f}, ExternalTemp={self.external_temp:.1f}, FanSpeed={self.fan_speed}")
+                
+                # IMPORTANT: GUI updates should be done safely, e.g., via signals or QTimer.singleShot
+                # For simplicity here, direct update, but watch for threading issues.
+                QTimer.singleShot(0, self.update_ac_status_display)
+                QTimer.singleShot(0, self.update_cabin_temp_display)
+                QTimer.singleShot(0, self.update_external_temp_display) # Add call to update external temp display
+                QTimer.singleShot(0, self.update_fan_display)
+            else:
+                print(f"Received HVAC Status (0x{can_id:X}) but DLC {dlc} is too short for all expected data fields.")
+        # Add handling for other CAN IDs if necessary
+
+    def send_temperature_message(self):
+        # This will send the self.requested_temp
+        # This message ID and format need to be defined by the HVAC system.
+        # For now, let's assume it sends HVAC_AC_STATUS_ID (0xAC1) with power, fan, temp_req.
+        # This assumption might be wrong based on HVAC ECU's can_receiver_thread.
+        # HVAC expects HVAC_AC_STATUS_ID to contain: data[0]=power, data[1]=fan, (data[2]=mode)
+        # It seems HVAC_CONTROL_ID (0x123) is for: data[0]=power, data[1]=target_temp*2, data[2]=fan
+        # Let's use HVAC_CONTROL_ID (0x123) to send requested temperature
+        # This requires knowing the current power and fan state to send them too.
+
+        # For this example, we'll re-purpose the old send_can_message structure
+        # but this should ideally be a specific function like request_ac_power_toggle
+        
+        # To set temperature, we might need to send a different CAN ID or ensure
+        # the HVAC app can parse it from a general control message.
+        # The current HVAC app uses HVAC_CONTROL_ID (0x123) for this.
+        # data: [ac_on, target_temp*2, fan_speed]
+        
+        # We will use self.actual_ac_power_state for the ac_on part
+        # to reflect the true known state of the AC system.
+        ac_on_byte = 1 if self.actual_ac_power_state else 0
+        temp_byte = int(self.requested_temp * 2) # As per HVAC_CONTROL_ID format
+        fan_byte = self.fan_speed
+
+        can_data_payload = bytes([ac_on_byte, temp_byte, fan_byte])
+        msg_id = 0x123 # HVAC_CONTROL_ID
+
+        frame = CanFrame()
+        SilKit_Struct_Init(CanFrame, frame)
+        frame.id = msg_id
+        frame.flags = 0 # Standard ID, Data frame
+        frame.dlc = len(can_data_payload)
+        
+        temp_data_buffer = (c_uint8 * len(can_data_payload))(*can_data_payload)
+        frame.data.data = cast(temp_data_buffer, POINTER(c_uint8))
+        frame.data.size = len(can_data_payload)
+
+        print(f"Sending Temp/Control Command - ID: 0x{frame.id:X}, DLC: {frame.dlc}, Data: {list(can_data_payload)}")
+        result = silkit.SilKit_CanController_SendFrame(self.can_controller, byref(frame), None)
+        if result != 0:
+            print(f"Error sending Temp/Control command: {result}")
+        else:
+            print("Temp/Control command sent successfully.")
 
     def increase_temp(self):
-        if self.requested_temp < 30:
-            self.requested_temp += 0.5
-            self.req_temp_display.display(self.requested_temp)
-            self.temp_source_label.setText(f"Temperature: Manual Control (Requested: {self.requested_temp:.1f}°C)")
-            # Send an immediate update
-            self.send_temperature_message()
-            
+        self.requested_temp = min(30.0, self.requested_temp + 0.5)
+        self.update_requested_temp_display()
+        self.send_temperature_message() # Send updated requested temp
+
     def decrease_temp(self):
-        if self.requested_temp > 16:
-            self.requested_temp -= 0.5
-            self.req_temp_display.display(self.requested_temp)
-            self.temp_source_label.setText(f"Temperature: Manual Control (Requested: {self.requested_temp:.1f}°C)")
-            # Send an immediate update
-            self.send_temperature_message()
-            
+        self.requested_temp = max(15.0, self.requested_temp - 0.5)
+        self.update_requested_temp_display()
+        self.send_temperature_message() # Send updated requested temp
+
     def increase_fan(self):
-        if self.fan_speed < 5:
-            self.fan_speed += 1
-            self.fan_display.display(self.fan_speed)
-            
+        self.fan_speed = min(5, self.fan_speed + 1)
+        self.update_fan_display()
+        self.send_temperature_message() # Fan speed is part of HVAC_CONTROL_ID
+
     def decrease_fan(self):
-        if self.fan_speed > 1:
-            self.fan_speed -= 1
-            self.fan_display.display(self.fan_speed)
-            
-    def toggle_power(self, state):
-        # Update the power state
-        self.power = state
-        
-        # Create and send a CAN message immediately to update power status
-        print(f"Power state changed to: {'ON' if state else 'OFF'}, sending immediate CAN message")
-        
-        # Create a dedicated CAN frame for power status change
-        frame = CanFrame()
-        SilKit_Struct_Init(CanFrame, frame)
-        
-        # Set CAN frame fields - use a different ID for power-specific messages
-        frame.id = 0xAC2  # Special ID for power status
-        frame.flags = 0
-        frame.dlc = 1
-        
-        # Include only the power status in this dedicated message
-        power_byte = 1 if self.power else 0
-        data = bytearray([power_byte])
-        data_len = len(data)
-        
-        # Assign data using cast and SilKit_ByteVector structure
-        data_buffer = (c_uint8 * data_len)(*data)
-        frame.data.data = cast(data_buffer, POINTER(c_uint8))
-        frame.data.size = data_len
-        
-        # Send the frame
-        result = silkit.SilKit_CanController_SendFrame(self.can_controller, byref(frame), None)
-        if result != 0:
-            print(f"Warning: Failed to send power status CAN frame: {result}")
-        else:
-            print(f"Power status CAN frame sent successfully: {'ON' if state else 'OFF'}")
-        
-        # Also send a regular status update
-        self.send_can_message()
-        
-        # Also send a temperature update
-        self.send_temperature_message()
-        
+        self.fan_speed = max(1, self.fan_speed - 1)
+        self.update_fan_display()
+        self.send_temperature_message() # Fan speed is part of HVAC_CONTROL_ID
+
     def closeEvent(self, event):
-        print("Shutting down AC Panel...")
-        # Clean shutdown of SIL-Kit
-        self.can_timer.stop()
-        self.event_timer.stop()
-        
-        if hasattr(self, 'lifecycle_service') and self.lifecycle_service:
-            print("Stopping lifecycle service...")
-            silkit.SilKit_LifecycleService_Stop(self.lifecycle_service, b"Normal shutdown")
-        
-        if hasattr(self, 'handler_id') and self.can_controller:
-            print("Removing CAN handler...")
-            silkit.SilKit_CanController_RemoveFrameHandler(self.can_controller, self.handler_id)
-            
+        print("Closing AC Panel...")
         if hasattr(self, 'can_controller') and self.can_controller:
             print("Stopping CAN controller...")
             silkit.SilKit_CanController_Stop(self.can_controller)
-            
+        if hasattr(self, 'lifecycle_service') and self.lifecycle_service:
+            print("Stopping lifecycle service...")
+            silkit.SilKit_LifecycleService_Stop(self.lifecycle_service, b"ACPanel_Shutdown")
+        # No direct destroy for controller, participant manages it.
         if hasattr(self, 'participant') and self.participant:
             print("Destroying participant...")
-            silkit.SilKit_Participant_Destroy(self.participant)
-            
+            # SilKit_Participant_Destroy(self.participant) # This can cause issues if lifecycle not fully stopped
         if hasattr(self, 'participant_config') and self.participant_config:
-            print("Destroying participant configuration...")
-            silkit.SilKit_ParticipantConfiguration_Destroy(self.participant_config)
-            
-        print("Shutdown complete.")
-        event.accept()
-        
+            # SilKit_ParticipantConfiguration_Destroy(self.participant_config)
+            pass # Usually configuration is destroyed when participant is.
+        print("AC Panel cleanup finished.")
+        super().closeEvent(event)
+
+    # Dummy process_silkit_events, SIL Kit does its own event processing
     def process_silkit_events(self):
-        # This is a periodic callback that allows SilKit to process events
-        # Nothing to do here as SilKit handles events in its own thread
         pass
 
 def main():
