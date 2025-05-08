@@ -16,10 +16,20 @@ Virtual model
 - CAN message database and code generation such as arxml, for use in zephyr / NuuttX
 - Service-oriented communication (some/ip, zettascale) besides CAN messages
 - zephyr time synced with silkit time (silkit being the master)
-- Add support for qemu besides native_sim
-- Add decent functional tests for each ECU
+- support for qemu besides native_sim
+- decent functional tests for each ECU
+- Android auto ECU with AC app
+- REST control API (for remote control)
+- REST inspection API (for monitoring and debug)
+- Add HVAC based on Zephyr with uService interface definition
+- integrate with SDV-Labs
 
 Cloud
 - Run docker in cloud (GCP or AWS)
 - Remote connect to a docker sim running in cloud
 - Integration with ci/cd that triggers regression using cloud setup
+
+BUGS
+- When launching a new wsl session (after shutdown) and running the script run-ac-simulator.sh, 
+all processes come up correctly but lighting panel does not show up (wayland issue). 
+Killing the process (control-c) and pressing Enter to relaunch fixes the issue and lihghting GUI how shows
